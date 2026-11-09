@@ -1,6 +1,6 @@
 // Keeps the app working on site with no signal.
 // Serves from the cache at once, then refreshes the cache in the background.
-const CACHE = 'paid-and-signed-v1';
+const CACHE = 'paid-and-signed-v2';
 const FILES = [
   './',
   'index.html',

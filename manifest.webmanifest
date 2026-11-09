@@ -1,7 +1,9 @@
 {
-  "name": "Paid & Signed",
-  "short_name": "Paid & Signed",
+  "name": "שולם ונחתם",
+  "short_name": "שולם ונחתם",
   "description": "Write down a payment, get it signed on the phone, keep the PDF.",
+  "lang": "he",
+  "dir": "rtl",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

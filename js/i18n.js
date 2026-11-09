@@ -25,7 +25,7 @@ const STRINGS = {
     noResults: 'No payments match that search.',
     search: 'Search by name or description',
     installTitle: 'Keep this on your Home Screen',
-    installBody: 'Tap the Share button in Safari, then Add to Home Screen. Your receipts stay safe there and it works without internet.',
+    installBody: 'In Safari, tap Share (it may be under the ••• menu), then More if you need it, then Add to Home Screen. Your receipts stay safe there and it works without internet.',
     gotIt: 'Got it',
 
     back: 'Back',
@@ -154,7 +154,7 @@ const STRINGS = {
     noResults: 'לא נמצאו תשלומים מתאימים.',
     search: 'חיפוש לפי שם או תיאור',
     installTitle: 'כדאי להוסיף למסך הבית',
-    installBody: 'לחצו על כפתור השיתוף ב-Safari ואז על "הוספה למסך הבית". כך האישורים נשמרים והאפליקציה עובדת גם בלי אינטרנט.',
+    installBody: 'ב-Safari לחצו על "שיתוף" (אפשר למצוא אותו בתפריט •••), ואז על "הוספה למסך הבית" (אם צריך, תחת "עוד"). כך האישורים נשמרים והאפליקציה עובדת גם בלי אינטרנט.',
     gotIt: 'הבנתי',
 
     back: 'חזרה',
