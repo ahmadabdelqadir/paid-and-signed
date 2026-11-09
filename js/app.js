@@ -7,13 +7,14 @@ import {
   projects, getProject, activeProject, addProject, renameProject, setActiveProject, deleteEmptyProject, projectSummary,
 } from './store.js';
 import { SignaturePad, drawSignature } from './signature.js';
-import { renderReceipt, buildPdfFile } from './receipt.js';
+import { renderReceipt, buildPdfFile, buildImageFile } from './receipt.js';
 
 const root = document.getElementById('app');
 const overlay = document.getElementById('overlay');
 const stack = [];
 const screens = {};
 const pdfs = new Map();
+const images = new Map();
 let t = translator('he');
 let activePad = null;
 
@@ -151,6 +152,11 @@ const receiptOptions = (r) => ({
 function preparePdf(r) {
   if (!pdfs.has(r.id)) pdfs.set(r.id, buildPdfFile(r, receiptOptions(r)));
   return pdfs.get(r.id);
+}
+
+function prepareImage(r) {
+  if (!images.has(r.id)) images.set(r.id, buildImageFile(r, receiptOptions(r)));
+  return images.get(r.id);
 }
 
 function stubHtml(r) {
@@ -831,7 +837,9 @@ screens.detail = (frame) => {
           ? `<button class="btn primary" type="button" data-sign>${esc(t('getSignatures'))}</button>
              <button class="btn ghost" type="button" data-edit>${esc(t('edit'))}</button>`
           : `<button class="btn primary" type="button" data-share disabled>${esc(t('preparing'))}</button>
-             <p class="help center">${esc(t('shareHint'))}</p>`}
+             <p class="help center">${esc(t('shareHint'))}</p>
+             <button class="btn ghost" type="button" data-photo disabled>${esc(t('savePhoto'))}</button>
+             <p class="help center">${esc(t('photoHint'))}</p>`}
         <button class="link danger" type="button" data-delete>${esc(isDraft ? t('deletePayment') : t('deleteReceipt'))}</button>
       </div>
     </main>
@@ -851,6 +859,7 @@ screens.detail = (frame) => {
     if (!yes) return;
     await deleteReceipt(r.id);
     pdfs.delete(r.id);
+    images.delete(r.id);
     back();
   });
 
@@ -858,22 +867,33 @@ screens.detail = (frame) => {
     node.querySelector('.sheet').append(renderReceipt(r, receiptOptions(r), 1));
     const share = node.querySelector('[data-share]');
     if (!share) return;
+    const photo = node.querySelector('[data-photo]');
     let file = null;
+    let image = null;
     share.addEventListener('click', () => {
       if (file) deliver(file);
     });
+    photo.addEventListener('click', () => {
+      if (image) deliver(image);
+    });
     // Built before the tap: iOS only opens the share sheet straight after one.
-    setTimeout(() => {
-      preparePdf(r)
-        .then((built) => {
-          file = built;
-          share.textContent = t('sharePdf');
-          share.disabled = false;
-        })
-        .catch(() => {
-          pdfs.delete(r.id);
-          share.textContent = t('pdfFailed');
-        });
+    // One at a time, so the phone never holds two large canvases together.
+    setTimeout(async () => {
+      try {
+        file = await preparePdf(r);
+        share.textContent = t('sharePdf');
+        share.disabled = false;
+      } catch {
+        pdfs.delete(r.id);
+        share.textContent = t('pdfFailed');
+      }
+      try {
+        image = await prepareImage(r);
+        photo.disabled = false;
+      } catch {
+        images.delete(r.id);
+        photo.textContent = t('photoFailed');
+      }
     }, 60);
   };
   return node;

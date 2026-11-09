@@ -317,14 +317,31 @@ async function canvasToPdf(canvas, title) {
   return new Blob(parts, { type: 'application/pdf' });
 }
 
-export async function buildPdfFile(r, options) {
-  const canvas = renderReceipt(r, options, PDF_SCALE);
-  const number = receiptNumber(r.number);
-  const label = translator(r.lang || options.lang)('receiptNo', { n: number });
-  const blob = await canvasToPdf(canvas, label);
-  // Free the large canvas straight away. iOS is strict about canvas memory.
+function fileLabel(r, options) {
+  return translator(r.lang || options.lang)('receiptNo', { n: receiptNumber(r.number) });
+}
+
+function fileBaseName(r, options) {
+  const safeName = r.recipient.replace(/[\\/:*?"<>|]/g, '').trim();
+  return `${fileLabel(r, options)} ${safeName} ${r.date}`;
+}
+
+// Frees the large canvas straight away. iOS is strict about canvas memory.
+function release(canvas) {
   canvas.width = 0;
   canvas.height = 0;
-  const safeName = r.recipient.replace(/[\\/:*?"<>|]/g, '').trim();
-  return new File([blob], `${label} ${safeName} ${r.date}.pdf`, { type: 'application/pdf' });
+}
+
+export async function buildPdfFile(r, options) {
+  const canvas = renderReceipt(r, options, PDF_SCALE);
+  const blob = await canvasToPdf(canvas, fileLabel(r, options));
+  release(canvas);
+  return new File([blob], `${fileBaseName(r, options)}.pdf`, { type: 'application/pdf' });
+}
+
+export async function buildImageFile(r, options) {
+  const canvas = renderReceipt(r, options, PDF_SCALE);
+  const blob = await jpegOf(canvas);
+  release(canvas);
+  return new File([blob], `${fileBaseName(r, options)}.jpg`, { type: 'image/jpeg' });
 }
