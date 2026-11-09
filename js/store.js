@@ -13,7 +13,8 @@ export const state = {
 const DEFAULT_SETTINGS = {
   lang: 'he',
   name: '',
-  project: '',
+  projects: [],
+  activeProjectId: null,
   currency: 'ILS',
   nextNo: 1,
   savedSignature: null,
@@ -51,11 +52,31 @@ export async function loadAll() {
   ]);
   state.settings = { ...DEFAULT_SETTINGS, ...(saved || {}) };
   state.receipts = receipts || [];
+  await moveToProjects();
   // Ask the browser not to clear this data when space runs low.
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 }
 
-export const isSetUp = () => Boolean(state.settings.name);
+// Older versions had one list and a project name in settings. This puts
+// everything into a first project, so nothing is lost when the app updates.
+async function moveToProjects() {
+  const s = state.settings;
+  if (!s.projects.length && (s.name || state.receipts.length)) {
+    const name = s.project || state.receipts.find((r) => r.project)?.project || 'הבית שלנו';
+    s.projects = [{ id: newId(), name, createdAt: new Date().toISOString() }];
+  }
+  if (!s.projects.length) return;
+  if (!s.projects.some((p) => p.id === s.activeProjectId)) s.activeProjectId = s.projects[0].id;
+  delete s.project;
+  await tx(META, 'readwrite', (store) => store.put(s, 'settings'));
+  for (const r of state.receipts) {
+    if (r.projectId) continue;
+    r.projectId = s.activeProjectId;
+    await tx(RECEIPTS, 'readwrite', (store) => store.put(r));
+  }
+}
+
+export const isSetUp = () => Boolean(state.settings.name && state.settings.projects.length);
 
 export function saveSettings(patch) {
   Object.assign(state.settings, patch);
@@ -84,27 +105,74 @@ export function deleteReceipt(id) {
 
 export const sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-export const signed = () => state.receipts.filter((r) => r.status === 'signed');
-export const drafts = () => state.receipts.filter((r) => r.status === 'draft');
+export const projects = () => state.settings.projects;
+export const getProject = (id) => projects().find((p) => p.id === id);
+export const activeProject = () => getProject(state.settings.activeProjectId) || projects()[0];
+const activeId = () => activeProject()?.id;
+
+export function createProject(name, id = newId()) {
+  const project = { id, name, createdAt: new Date().toISOString() };
+  state.settings.projects = [...projects(), project];
+  return project;
+}
+
+export async function addProject(name) {
+  const project = createProject(name);
+  await saveSettings({ activeProjectId: project.id });
+  return project;
+}
+
+export function renameProject(id, name) {
+  return saveSettings({ projects: projects().map((p) => (p.id === id ? { ...p, name } : p)) });
+}
+
+export const setActiveProject = (id) => saveSettings({ activeProjectId: id });
+
+// Only an empty project can be deleted, so a signed receipt can never vanish this way.
+export async function deleteEmptyProject(id) {
+  if (state.receipts.some((r) => r.projectId === id) || projects().length < 2) return;
+  const left = projects().filter((p) => p.id !== id);
+  await saveSettings({
+    projects: left,
+    activeProjectId: state.settings.activeProjectId === id ? left[0].id : state.settings.activeProjectId,
+  });
+}
+
+// projectId: leave it out for the open project, or pass null for every project.
+const inProject = (r, projectId) => projectId === null || r.projectId === projectId;
+
+export const signed = (projectId = activeId()) =>
+  state.receipts.filter((r) => r.status === 'signed' && inProject(r, projectId));
+export const drafts = (projectId = activeId()) =>
+  state.receipts.filter((r) => r.status === 'draft' && inProject(r, projectId));
 
 const round = (n) => Math.round(n * 100) / 100;
 
-export function totalPaid(currency = state.settings.currency) {
-  return round(signed().filter((r) => r.currency === currency).reduce((sum, r) => sum + r.amount, 0));
+export function totalPaid(currency = state.settings.currency, projectId = activeId()) {
+  return round(signed(projectId).filter((r) => r.currency === currency).reduce((sum, r) => sum + r.amount, 0));
 }
 
-export function paidTo(name, currency = state.settings.currency) {
+export function paidTo(name, currency = state.settings.currency, projectId = activeId()) {
   return round(
-    signed()
+    signed(projectId)
       .filter((r) => r.currency === currency && sameName(r.recipient, name))
       .reduce((sum, r) => sum + r.amount, 0)
   );
 }
 
-// One entry per person who has ever been paid, most recent first.
-export function people() {
+export function projectSummary(id) {
+  return {
+    signedCount: signed(id).length,
+    waitingCount: drafts(id).length,
+    total: totalPaid(state.settings.currency, id),
+    isEmpty: !state.receipts.some((r) => r.projectId === id),
+  };
+}
+
+// One entry per person who has been paid, most recent first.
+export function people(projectId = activeId()) {
   const byName = new Map();
-  const sorted = [...state.receipts].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const sorted = state.receipts.filter((r) => inProject(r, projectId)).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   for (const r of sorted) {
     const key = r.recipient.trim().toLowerCase();
     if (!byName.has(key)) {
@@ -115,12 +183,21 @@ export function people() {
     if (!person.recipientId && r.recipientId) person.recipientId = r.recipientId;
     if (r.status === 'signed') person.count += 1;
   }
-  for (const person of byName.values()) person.total = paidTo(person.name);
+  for (const person of byName.values()) person.total = paidTo(person.name, state.settings.currency, projectId);
   return [...byName.values()];
 }
 
 export function exportBackup() {
   return JSON.stringify({ app: 'paid-and-signed', version: 1, settings: state.settings, receipts: state.receipts });
+}
+
+function projectForImported(receipt, backupProjects) {
+  const existing = getProject(receipt.projectId);
+  if (existing) return existing;
+  const fromBackup = backupProjects.find((p) => p.id === receipt.projectId);
+  const name = fromBackup?.name || receipt.project;
+  if (!name) return activeProject();
+  return projects().find((p) => p.name === name) || createProject(name, fromBackup?.id);
 }
 
 // Adds receipts from a backup. Receipts already on the phone stay as they are.
@@ -130,6 +207,7 @@ export async function importBackup(text) {
   let added = 0;
   for (const receipt of data.receipts) {
     if (!receipt.id || getReceipt(receipt.id)) continue;
+    receipt.projectId = projectForImported(receipt, data.settings?.projects || []).id;
     await saveReceipt(receipt);
     added += 1;
   }

@@ -14,6 +14,7 @@ const MUTE = '#5E6169';
 const CARBON = '#1E2C9B';
 const RED = '#C8202F';
 const RULE = '#D9D9D2';
+const TINT = '#F1F2F8';
 
 const DISPLAY = '"DIN Condensed",system-ui,"Arial Hebrew",sans-serif';
 const TEXT = '"Avenir Next",system-ui,"Arial Hebrew",sans-serif';
@@ -91,41 +92,68 @@ export function renderReceipt(r, { lang, payer, project, paidToDate }, scale = 1
   const projectName = r.project || project;
   const figureMoney = (n) => money(n, r.currency);
 
-  // Heading and serial number
   const isSigned = r.status === 'signed';
-  const serial = isSigned ? `${t('no')} ${receiptNumber(r.number)}` : t('draft');
-  const serialSize = 60;
-  g.font = `bold ${serialSize}px ${DISPLAY}`;
-  const titleMax = W - 2 * M - g.measureText(serial).width - 40;
-  let titleSize = 92;
+  const contentW = W - 2 * M;
+
+  // Heading, with the receipt number set apart on the other side
+  g.fillStyle = CARBON;
+  g.fillRect(0, 0, W, 12);
+  let titleSize = 76;
   g.font = `bold ${titleSize}px ${DISPLAY}`;
-  while (g.measureText(t('pdfTitle')).width > titleMax && titleSize > 40) {
+  while (g.measureText(t('pdfTitle')).width > contentW - 260 && titleSize > 40) {
     titleSize -= 2;
     g.font = `bold ${titleSize}px ${DISPLAY}`;
   }
-  write(t('pdfTitle'), M, 134, `bold ${titleSize}px ${DISPLAY}`, INK);
-  write(serial, W - M, 134, `bold ${serialSize}px ${DISPLAY}`, isSigned ? RED : MUTE, 'end');
-  if (projectName) write(projectName, M, 178, `500 27px ${TEXT}`, MUTE);
+  write(t('pdfTitle'), M, 122, `bold ${titleSize}px ${DISPLAY}`, INK);
+  if (projectName) write(projectName, M, 166, `500 27px ${TEXT}`, MUTE);
+  if (isSigned) {
+    write(t('pdfReceiptNo'), W - M, 84, `500 23px ${TEXT}`, MUTE, 'end');
+    write(receiptNumber(r.number), W - M, 142, `bold 58px ${DISPLAY}`, RED, 'end');
+  } else {
+    write(t('draft'), W - M, 122, `bold 46px ${DISPLAY}`, MUTE, 'end');
+  }
+  rule(M, 190, contentW, INK, 2.5);
 
-  // Amount band
-  const bandTop = 208;
-  const bandH = 204;
-  const bandPad = 36;
+  // Who and when
+  const columns = [
+    { w: 300, label: t('pdfPaidTo'), value: r.recipient, extra: r.recipientId },
+    { w: 250, label: t('pdfPaidBy'), value: payerName },
+    { w: 250, label: t('pdfDate'), value: longDate(r.date, useLang) },
+  ];
+  let columnX = M;
+  for (const column of columns) {
+    write(column.label, columnX, 236, `500 24px ${TEXT}`, MUTE);
+    g.font = `600 30px ${TEXT}`;
+    const lines = wrap(g, column.value, column.w, 2);
+    lines.forEach((line, i) => write(line, columnX, 278 + i * 38, `600 30px ${TEXT}`, INK));
+    if (column.extra) {
+      g.font = `500 24px ${TEXT}`;
+      write(wrap(g, column.extra, column.w, 1)[0], columnX, 278 + lines.length * 37, `500 24px ${TEXT}`, MUTE);
+    }
+    columnX += column.w + 28;
+  }
+
+  // Amount
+  const panelTop = 380;
+  const panelH = 176;
+  const panelPad = 36;
+  g.fillStyle = TINT;
+  g.fillRect(M, panelTop, contentW, panelH);
   g.fillStyle = CARBON;
-  g.fillRect(M, bandTop, W - 2 * M, bandH);
-  write(t('pdfAmount'), M + bandPad, bandTop + 52, `600 26px ${TEXT}`, '#FFFFFF');
+  g.fillRect(rectX(M, 8), panelTop, 8, panelH);
+  write(t('pdfAmount'), M + panelPad, panelTop + 50, `600 26px ${TEXT}`, INK);
 
   const hasAccount = r.agreedTotal != null;
-  const accountW = 310;
-  const amountMax = W - 2 * M - 2 * bandPad - (hasAccount ? accountW + 28 : 0);
-  let amountSize = 136;
+  const accountW = 330;
+  const amountMax = contentW - panelPad - 32 - (hasAccount ? accountW + 56 : 0);
+  let amountSize = 118;
   const amountText = figureMoney(r.amount);
   g.font = `bold ${amountSize}px ${DISPLAY}`;
-  while (g.measureText(amountText).width > amountMax && amountSize > 60) {
+  while (g.measureText(amountText).width > amountMax && amountSize > 56) {
     amountSize -= 4;
     g.font = `bold ${amountSize}px ${DISPLAY}`;
   }
-  writeFigure(amountText, M + bandPad, bandTop + 172, `bold ${amountSize}px ${DISPLAY}`, '#FFFFFF', 'start');
+  writeFigure(amountText, M + panelPad, panelTop + 148, `bold ${amountSize}px ${DISPLAY}`, CARBON, 'start');
 
   if (hasAccount) {
     const remaining = Math.max(0, Math.round((r.agreedTotal - paidToDate) * 100) / 100);
@@ -134,37 +162,36 @@ export function renderReceipt(r, { lang, payer, project, paidToDate }, scale = 1
       [t('pdfPaidToDate'), paidToDate],
       [t('pdfRemaining'), remaining],
     ];
-    const end = W - M - bandPad;
+    const end = W - M - 32;
     const start = end - accountW;
+    g.fillStyle = '#C9CBDA';
+    g.fillRect(rectX(start - 28, 1.5), panelTop + 24, 1.5, panelH - 48);
     rows.forEach(([label, value], i) => {
-      const y = bandTop + 60 + i * 52;
-      write(label, start, y, `500 24px ${TEXT}`, '#FFFFFF');
-      writeFigure(figureMoney(value), end, y, `bold 34px ${DISPLAY}`, '#FFFFFF', 'end');
+      const y = panelTop + 50 + i * 49;
+      const last = i === rows.length - 1;
+      write(label, start, y, `${last ? 700 : 500} 25px ${TEXT}`, INK);
+      writeFigure(figureMoney(value), end, y, `bold 36px ${DISPLAY}`, last ? CARBON : INK, 'end');
     });
   }
 
   // Details
   const methodText = t(`method_${r.method}`) + (r.reference ? `, ${r.reference}` : '');
-  const paidToText = r.recipient + (r.recipientId ? `\n${r.recipientId}` : '');
   const rows = [
-    [t('pdfDate'), longDate(r.date, useLang), 1],
-    [t('pdfPaidTo'), paidToText, 3],
-    [t('pdfPaidBy'), payerName, 2],
     [t('pdfFor'), r.description, 8],
     [t('pdfStage'), r.stage, 2],
     [t('pdfMethod'), methodText, 2],
     [t('pdfNotes'), r.notes, 5],
   ].filter(([, value]) => value);
 
-  const rowsTop = 446;
-  const rowsLimit = 975;
-  const labelW = 214;
-  const valueW = W - 2 * M - labelW;
+  const rowsTop = 580;
+  const rowsLimit = 950;
+  const labelW = 200;
+  const valueW = contentW - labelW;
 
   const layout = (f) => {
-    g.font = `500 ${31 * f}px ${TEXT}`;
-    const lineH = 42 * f;
-    const pad = 15 * f;
+    g.font = `600 ${30 * f}px ${TEXT}`;
+    const lineH = 41 * f;
+    const pad = 16 * f;
     let height = 0;
     const laid = rows.map(([label, value, maxLines]) => {
       const lines = wrap(g, value, valueW, maxLines);
@@ -184,13 +211,13 @@ export function renderReceipt(r, { lang, payer, project, paidToDate }, scale = 1
 
   let y = rowsTop;
   for (const row of result.laid) {
-    const first = y + result.pad + 31 * factor;
+    const first = y + result.pad + 30 * factor;
     write(row.label, M, first, `500 ${25 * factor}px ${TEXT}`, MUTE);
     row.lines.forEach((line, i) => {
-      write(line, M + labelW, first + i * result.lineH, `600 ${31 * factor}px ${TEXT}`, INK);
+      write(line, M + labelW, first + i * result.lineH, `600 ${30 * factor}px ${TEXT}`, INK);
     });
     y += row.rowH;
-    rule(M, y, W - 2 * M);
+    rule(M, y, contentW);
   }
 
   // Confirmation sentence
@@ -199,34 +226,39 @@ export function renderReceipt(r, { lang, payer, project, paidToDate }, scale = 1
     payer: payerName,
     date: longDate(r.date, useLang),
   });
-  g.font = `500 28px ${TEXT}`;
-  wrap(g, statement, W - 2 * M, 3).forEach((line, i) => {
-    write(line, M, 1040 + i * 40, `500 28px ${TEXT}`, INK);
+  g.font = `500 27px ${TEXT}`;
+  wrap(g, statement, contentW, 3).forEach((line, i) => {
+    write(line, M, 996 + i * 39, `500 27px ${TEXT}`, INK);
   });
 
   // Signatures
   const gap = 56;
-  const colW = (W - 2 * M - gap) / 2;
+  const colW = (contentW - gap) / 2;
   const blocks = [
     { x: M, title: t('pdfSignRecipient'), name: r.recipient, sig: r.signatures?.recipient },
     { x: M + colW + gap, title: t('pdfSignPayer'), name: payerName, sig: r.signatures?.payer },
   ];
   for (const block of blocks) {
-    write(block.title, block.x, 1160, `500 24px ${TEXT}`, MUTE);
+    write(block.title, block.x, 1128, `500 24px ${TEXT}`, MUTE);
     if (block.sig) {
-      drawSignature(g, block.sig, { x: rectX(block.x, colW) + 8, y: 1170, w: colW - 16, h: 108 });
+      drawSignature(g, block.sig, { x: rectX(block.x, colW) + 8, y: 1138, w: colW - 16, h: 112 });
     }
-    rule(block.x, 1284, colW, INK, 2);
+    rule(block.x, 1256, colW, INK, 2);
     g.font = `600 27px ${TEXT}`;
-    write(wrap(g, block.name, colW, 1)[0], block.x, 1320, `600 27px ${TEXT}`, INK);
+    write(wrap(g, block.name, colW, 1)[0], block.x, 1292, `600 27px ${TEXT}`, INK);
     write(
       block.sig ? t('pdfSignedAt', { when: dateTime(block.sig.at, useLang) }) : t('pdfNotSigned'),
       block.x,
-      1354,
+      1324,
       `500 22px ${TEXT}`,
       MUTE
     );
   }
+
+  // Footer
+  rule(M, 1354, contentW);
+  write(t('pdfSignedOnPhone'), M, 1384, `500 20px ${TEXT}`, MUTE);
+  if (isSigned) write(t('receiptNo', { n: receiptNumber(r.number) }), W - M, 1384, `500 20px ${TEXT}`, MUTE, 'end');
 
   return canvas;
 }

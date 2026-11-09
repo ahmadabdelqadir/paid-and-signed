@@ -1,6 +1,6 @@
 // Keeps the app working on site with no signal.
 // Serves from the cache at once, then refreshes the cache in the background.
-const CACHE = 'paid-and-signed-v2';
+const CACHE = 'paid-and-signed-v3';
 const FILES = [
   './',
   'index.html',
@@ -17,7 +17,7 @@ const FILES = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {

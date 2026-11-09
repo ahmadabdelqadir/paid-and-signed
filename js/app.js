@@ -4,6 +4,7 @@ import {
 import {
   state, loadAll, isSetUp, saveSettings, newId, getReceipt, saveReceipt, deleteReceipt,
   signed, drafts, totalPaid, paidTo, people, sameName, exportBackup, importBackup,
+  projects, getProject, activeProject, addProject, renameProject, setActiveProject, deleteEmptyProject, projectSummary,
 } from './store.js';
 import { SignaturePad, drawSignature } from './signature.js';
 import { renderReceipt, buildPdfFile } from './receipt.js';
@@ -17,6 +18,8 @@ let t = translator('he');
 let activePad = null;
 
 const ICON = {
+  chevronDown: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9l7 7 7-7"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19l-4 1z"/></svg>',
   back: '<svg class="flip" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
   gear: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 };
@@ -141,8 +144,8 @@ const parseAmount = (value) => {
 const receiptOptions = (r) => ({
   lang: state.settings.lang,
   payer: state.settings.name,
-  project: state.settings.project,
-  paidToDate: r.status === 'signed' ? r.paidToDate : Math.round((paidTo(r.recipient, r.currency) + r.amount) * 100) / 100,
+  project: getProject(r.projectId)?.name,
+  paidToDate: r.status === 'signed' ? r.paidToDate : Math.round((paidTo(r.recipient, r.currency, r.projectId) + r.amount) * 100) / 100,
 });
 
 function preparePdf(r) {
@@ -207,7 +210,7 @@ const currencyChoices = () => CURRENCIES.map((c) => ({ value: c.code, label: c.s
 
 /* First run ------------------------------------------------------------ */
 
-screens.welcome = () => {
+screens.welcome = (frame) => {
   const s = state.settings;
   const node = view(`<div class="welcome">
     <header class="welcome-head">
@@ -221,13 +224,14 @@ screens.welcome = () => {
       </fieldset>
       <div class="field">
         <label for="w-name">${esc(t('yourName'))}</label>
-        <input id="w-name" class="line" autocomplete="name" value="${esc(s.name)}">
+        <input id="w-name" class="line" autocomplete="name" value="${esc(frame.nameDraft ?? s.name)}">
         <p class="help">${esc(t('yourNameHelp'))}</p>
         <p class="error" hidden></p>
       </div>
       <div class="field">
-        <label for="w-project">${esc(t('project'))}</label>
-        <input id="w-project" class="line" placeholder="${esc(t('projectPlaceholder'))}" value="${esc(s.project)}">
+        <label for="w-project">${esc(t('firstProject'))}</label>
+        <input id="w-project" class="line" placeholder="${esc(t('projectPlaceholder'))}" value="${esc(frame.projectDraft ?? '')}">
+        <p class="help">${esc(t('firstProjectHelp'))}</p>
       </div>
       <fieldset class="field">
         <legend>${esc(t('currency'))}</legend>
@@ -241,7 +245,9 @@ screens.welcome = () => {
   const project = node.querySelector('#w-project');
   node.querySelectorAll('input[name=lang]').forEach((input) => {
     input.addEventListener('change', async () => {
-      await saveSettings({ lang: input.value, name: name.value, project: project.value });
+      frame.nameDraft = name.value;
+      frame.projectDraft = project.value;
+      await saveSettings({ lang: input.value });
       applyLanguage();
       render();
     });
@@ -257,9 +263,9 @@ screens.welcome = () => {
     }
     await saveSettings({
       name: name.value.trim(),
-      project: project.value.trim() || t('projectPlaceholder'),
       currency: node.querySelector('input[name=currency]:checked').value,
     });
+    await addProject(project.value.trim() || t('projectPlaceholder'));
     stack.length = 0;
     stack.push({ name: 'home' });
     render();
@@ -305,7 +311,9 @@ screens.home = (frame) => {
   const node = view(`<div class="screen">
     <header class="cover">
       <div class="cover-top">
-        <p class="cover-project">${esc(settings.project)}</p>
+        <button class="project-switch" type="button" data-projects aria-label="${esc(t('switchProject'))}">
+          <span>${esc(activeProject().name)}</span>${ICON.chevronDown}
+        </button>
         <button class="icon-btn" type="button" data-settings aria-label="${esc(t('settings'))}">${ICON.gear}</button>
       </div>
       <p class="tally-label">${esc(t('paidSoFar'))}</p>
@@ -320,6 +328,7 @@ screens.home = (frame) => {
   </div>`);
 
   node.querySelector('[data-settings]').addEventListener('click', () => go('settings'));
+  node.querySelector('[data-projects]').addEventListener('click', openProjects);
   node.querySelector('[data-new]').addEventListener('click', () => go('form', { focus: true }));
   node.querySelectorAll('[data-tab]').forEach((b) => {
     b.addEventListener('click', () => {
@@ -351,6 +360,96 @@ screens.home = (frame) => {
   }
   return node;
 };
+
+function projectRowHtml(project, isCurrent) {
+  const summary = projectSummary(project.id);
+  const counts = [t('receiptsCount', { n: summary.signedCount })];
+  if (summary.waitingCount) counts.push(t('waitingCount', { n: summary.waitingCount }));
+  return `<div class="project-row ${isCurrent ? 'current' : ''}">
+    <button class="project-pick" type="button" data-pick="${esc(project.id)}" ${isCurrent ? 'aria-current="true"' : ''}>
+      <span class="person-main">
+        <span class="stub-name">${esc(project.name)}</span>
+        <span class="stub-date">${esc(counts.join(', '))}</span>
+      </span>
+      <span class="stub-amount fig">${moneyHtml(summary.total, state.settings.currency)}</span>
+    </button>
+    <button class="project-edit" type="button" data-edit="${esc(project.id)}" aria-label="${esc(t('editProject'))}">${ICON.pencil}</button>
+  </div>`;
+}
+
+function openProjects() {
+  const current = activeProject();
+  const node = view(`<div class="scrim">
+    <div class="dialog projects-sheet" role="dialog" aria-modal="true" aria-labelledby="projects-title">
+      <h2 id="projects-title">${esc(t('projects'))}</h2>
+      <div class="project-list">${projects().map((p) => projectRowHtml(p, p.id === current.id)).join('')}</div>
+      <button class="btn primary" type="button" data-add>${esc(t('newProject'))}</button>
+      <button class="btn ghost" type="button" data-close>${esc(t('close'))}</button>
+    </div>
+  </div>`);
+  const close = () => node.remove();
+  node.addEventListener('click', (e) => { if (e.target === node) close(); });
+  node.querySelector('[data-close]').addEventListener('click', close);
+  node.querySelector('[data-add]').addEventListener('click', () => { close(); openProjectEditor(null); });
+  node.querySelectorAll('[data-edit]').forEach((b) => {
+    b.addEventListener('click', () => { close(); openProjectEditor(getProject(b.dataset.edit)); });
+  });
+  node.querySelectorAll('[data-pick]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      await setActiveProject(b.dataset.pick);
+      close();
+      stack[stack.length - 1].scroll = 0;
+      render();
+    });
+  });
+  overlay.append(node);
+}
+
+// Sits at the top of the screen so the keyboard never covers it.
+function openProjectEditor(project) {
+  const canDelete = project && projects().length > 1 && projectSummary(project.id).isEmpty;
+  const node = view(`<div class="scrim top">
+    <form class="dialog" novalidate role="dialog" aria-modal="true" aria-labelledby="project-title">
+      <h2 id="project-title">${esc(project ? t('editProject') : t('newProject'))}</h2>
+      <div>
+        <label class="field-label" for="p-name">${esc(t('projectName'))}</label>
+        <input id="p-name" class="line" autocomplete="off" value="${esc(project?.name ?? '')}">
+        <p class="error" hidden></p>
+      </div>
+      <button class="btn primary" type="submit">${esc(t('save'))}</button>
+      <button class="btn ghost" type="button" data-cancel>${esc(t('cancel'))}</button>
+      ${canDelete ? `<button class="link danger" type="button" data-delete>${esc(t('deleteProject'))}</button>` : ''}
+    </form>
+  </div>`);
+  const input = node.querySelector('#p-name');
+  const error = node.querySelector('.error');
+  const finish = () => {
+    node.remove();
+    stack[stack.length - 1].scroll = 0;
+    render();
+  };
+  node.querySelector('[data-cancel]').addEventListener('click', () => {
+    node.remove();
+    openProjects();
+  });
+  node.querySelector('[data-delete]')?.addEventListener('click', async () => {
+    await deleteEmptyProject(project.id);
+    finish();
+  });
+  node.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = input.value.trim();
+    const clash = projects().some((p) => p.name === name && p.id !== project?.id);
+    error.textContent = !name ? t('errProjectName') : clash ? t('errProjectExists') : '';
+    error.hidden = !error.textContent;
+    if (error.textContent) return;
+    if (project) await renameProject(project.id, name);
+    else await addProject(name);
+    finish();
+  });
+  overlay.append(node);
+  input.focus();
+}
 
 function accountLine(person) {
   if (person.agreedTotal == null) return '';
@@ -414,6 +513,7 @@ screens.person = (frame) => {
 function blankReceipt() {
   return {
     id: newId(),
+    projectId: activeProject().id,
     status: 'draft',
     createdAt: new Date().toISOString(),
     amount: null,
@@ -433,7 +533,11 @@ function blankReceipt() {
 screens.form = (frame) => {
   const existing = frame.id ? getReceipt(frame.id) : null;
   const r = existing ? { ...existing } : { ...blankReceipt(), ...(frame.prefill || {}) };
+  // Names from other projects are offered too, but agreed totals stay per project.
   const known = people();
+  for (const other of people(null)) {
+    if (!known.some((p) => sameName(p.name, other.name))) known.push({ ...other, agreedTotal: null });
+  }
   const showMore = Boolean(r.agreedTotal != null || r.recipientId || r.notes);
   const methods = ['cash', 'transfer', 'cheque', 'other'].map((m) => ({ value: m, label: t(`method_${m}`) }));
   const stages = ['stage1', 'stage2', 'stage3', 'stageFinal'].map((k) => t(k));
@@ -441,6 +545,7 @@ screens.form = (frame) => {
   const node = view(`<div class="screen">
     ${barHtml(existing ? t('editTitle') : t('newTitle'))}
     <form class="paper form" novalidate autocomplete="off">
+      <p class="form-project">${esc(getProject(r.projectId)?.name)}</p>
       <div class="field">
         <label for="f-amount">${esc(t('amountPaid'))}</label>
         <div class="amount" dir="ltr">
@@ -695,10 +800,10 @@ async function finishSigning(r, signatures) {
     status: 'signed',
     number,
     payer: settings.name,
-    project: settings.project,
+    project: getProject(r.projectId)?.name,
     lang: settings.lang,
     signatures,
-    paidToDate: Math.round((paidTo(r.recipient, r.currency) + r.amount) * 100) / 100,
+    paidToDate: Math.round((paidTo(r.recipient, r.currency, r.projectId) + r.amount) * 100) / 100,
   };
   await saveReceipt(record);
   await saveSettings({ nextNo: number + 1 });
@@ -782,9 +887,9 @@ function csvText() {
     const guarded = /^[=+\-@]/.test(s) ? `'${s}` : s;
     return `"${guarded.replace(/"/g, '""')}"`;
   };
-  const header = ['No.', 'Date', 'Paid to', 'Amount', 'Currency', 'For', 'Stage', 'Method', 'Reference', 'Notes'];
-  const rows = signed().sort((a, b) => a.number - b.number).map((r) => [
-    receiptNumber(r.number), r.date, r.recipient, r.amount, r.currency, r.description, r.stage, r.method, r.reference, r.notes,
+  const header = ['Project', 'No.', 'Date', 'Paid to', 'Amount', 'Currency', 'For', 'Stage', 'Method', 'Reference', 'Notes'];
+  const rows = signed(null).sort((a, b) => a.number - b.number).map((r) => [
+    getProject(r.projectId)?.name, receiptNumber(r.number), r.date, r.recipient, r.amount, r.currency, r.description, r.stage, r.method, r.reference, r.notes,
   ]);
   return `﻿${[header, ...rows].map((row) => row.map(clean).join(',')).join('\r\n')}`;
 }
@@ -797,10 +902,6 @@ screens.settings = () => {
       <div class="field">
         <label for="s-name">${esc(t('yourName'))}</label>
         <input id="s-name" class="line" value="${esc(s.name)}">
-      </div>
-      <div class="field">
-        <label for="s-project">${esc(t('project'))}</label>
-        <input id="s-project" class="line" value="${esc(s.project)}">
       </div>
       <fieldset class="field">
         <legend>${esc(t('language'))}</legend>
@@ -837,7 +938,6 @@ screens.settings = () => {
     if (name.value.trim()) saveSettings({ name: name.value.trim() });
     else name.value = state.settings.name;
   });
-  node.querySelector('#s-project').addEventListener('change', (e) => saveSettings({ project: e.target.value.trim() }));
   node.querySelectorAll('input[name=lang]').forEach((input) => {
     input.addEventListener('change', async () => {
       await saveSettings({ lang: input.value });
